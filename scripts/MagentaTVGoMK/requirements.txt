@@ -1,0 +1,5 @@
+beautifulsoup4==4.14.3
+curl_cffi==0.14.0
+pwinput==1.0.3
+pywidevine==1.9.0
+Requests==2.32.5

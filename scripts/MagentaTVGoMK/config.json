@@ -1,0 +1,13 @@
+{
+  "cdm_file_name": "WVD.wvd",
+  "proxy": "",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+  "prefix": "MagentaTVGoMK | ",
+  "profile": 1,
+  "video_map": "v:best",
+  "audio_map": "a",
+  "subtitle_map": "s:0?",
+  "rate_emulation": "yes",
+  "use_legacy": true,
+  "proxy_in_xaccel": null
+}

@@ -1,0 +1,191 @@
+# StreamUpdater Instruction Manual
+
+This manual provides step-by-step instructions on how to set up, configure, and use the `StreamUpdater.py` script (version 0.15). This script is designed to manage and update video streams for integration with X Acceleration Codec (XAccel), a streaming service. It acts as a local server that handles stream updates, redirections, and interactions with XAccel via its API. The script supports manual stream selection, automatic updates, and legacy modes for older configurations.
+
+The script relies on two supporting files:
+- `config.json`: Global configuration for the updater.
+- `xaccel.py`: A Python class for interacting with the XAccel API.
+
+**Note:** This script assumes you have access to an XAccel instance (a streaming codec service). It does not include instructions for setting up XAccel itself—refer to XAccel's documentation for that.
+
+## Prerequisites
+
+Before using `StreamUpdater.py`, ensure the following:
+
+1. **Python Installation**:
+   - Python 3.12 or compatible version (the script uses Python 3 features).
+   - Install via the official Python website (python.org) or your system's package manager (e.g., `apt install python3` on Ubuntu).
+
+2. **Required Python Libraries**:
+   - Install these using pip (Python's package manager):
+     ```
+     pip install waitress flask requests
+     ```
+   - The script uses built-in modules like `json`, `signal`, `os`, `logging`, `importlib`, `time`, and `argparse`, which come with Python.
+
+3. **File Structure**:
+   - Place `StreamUpdater.py`, `config.json`, and `xaccel.py` in the same directory (e.g., `/path/to/streamupdater/`).
+   - Create a subdirectory named `scripts/` in the same location. This will hold custom "script" directories for different stream sources (e.g., for fetching streams from specific providers like YouTube or custom APIs).
+     - Each script directory (e.g., `scripts/myprovider/`) must contain:
+       - `config.json`: Script-specific configuration (e.g., API keys, user agents).
+       - `<script_name>.py`: A Python file defining a class named after the directory (e.g., `myprovider.py` with class `myprovider`). This class must implement methods like `get_channels()`, `get_title(channel)`, and `get_stream(channel)`. See "Creating Custom Scripts" below for details.
+
+4. **XAccel Access**:
+   - You need a running XAccel server with a valid API URL and token.
+   - Ensure your network allows connections to the XAccel URL.
+
+5. **Optional Tools**:
+   - A text editor (e.g., VS Code, Notepad++) for editing JSON and Python files.
+   - Git or a file manager for organizing directories.
+
+## Step 1: Configure the Global `config.json`
+
+Edit `config.json` in the main directory with your XAccel details and server settings. Use a text editor to replace placeholders:
+
+```json
+{
+  "xaccel_url": "https://your-xaccel-server.com",  // Replace with your XAccel API base URL
+  "xaccel_token": "your-api-token-here",          // Replace with your XAccel API token
+  "base_url": "http://127.0.0.1",                 // Localhost base URL (change if hosting remotely)
+  "port": 27015                                   // Port for the Flask server (default 27015; ensure it's free)
+}
+```
+
+- **xaccel_url**: The base API endpoint for your XAccel instance (e.g., `http://192.168.1.100:8080`).
+- **xaccel_token**: Authentication token from XAccel.
+- **base_url**: The URL where the StreamUpdater server will run (localhost by default).
+- **port**: The TCP port the server listens on. Check for conflicts with `netstat` or similar tools.
+
+Save the file. If the file is missing or malformed, the script will error out.
+
+## Step 2: Create Custom Scripts in `./scripts/`
+
+The script relies on "provider scripts" in `./scripts/` to fetch stream data. Each provider (e.g., for a specific streaming service) is a subdirectory.
+
+1. Create a subdirectory in `./scripts/` (e.g., `mkdir scripts/myprovider`).
+
+2. Inside the subdirectory, create `config.json` for script-specific settings. Example:
+   ```json
+   {
+     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+     "api_key": "your-provider-api-key",
+     "preserve_keys": true,                  // Optional: Preserve decryption keys during updates
+     "use_legacy": false,                    // Optional: Use legacy updater mode
+     "delay": 30,                            // Optional: Delay in seconds for legacy checks
+     "tolerance": 0.8,                       // Optional: Bitrate/speed tolerance for updates
+     "always_update_in_xaccel": false        // Optional: Always force updates in XAccel
+   }
+   ```
+
+3. Create `<script_name>.py` (e.g., `myprovider.py`) defining a class with the same name. The class must include:
+   - `__init__(self, config)`: Initialize with the script's config.
+   - `get_channels(self)`: Return a list of available channels/streams (as dicts).
+   - `get_title(self, channel)`: Return a string title for a channel.
+   - `get_stream(self, channel)`: Fetch and return stream details (dict with 'url', optional 'keys' for decryption, 'headers').
+   - Optional attributes/methods: `prefix` (stream name prefix), `profile` (XAccel profile ID), `video_map`, `audio_map`, `subtitle_map`, `rate_emulation`, `proxy_in_xaccel`, `user_agent`.
+
+   Example minimal `myprovider.py`:
+   ```python
+   import requests
+
+   class myprovider:
+       def __init__(self, config):
+           self.config = config
+           self.user_agent = config['user-agent']
+           self.prefix = 'MY_'
+           self.profile = 'default_profile_id'  # XAccel profile
+           self.video_map = 'v:0'               # Optional mappings
+           self.audio_map = 'a:0'
+           self.subtitle_map = 's:0?'
+           self.rate_emulation = 'no'
+
+       def get_channels(self):
+           # Fetch or hardcode channels
+           return [{'id': 1, 'name': 'Channel1'}, {'id': 2, 'name': 'Channel2'}]
+
+       def get_title(self, channel):
+           return channel['name']
+
+       def get_stream(self, channel):
+           # Fetch stream URL (example: dummy API call)
+           response = requests.get(f"https://api.example.com/stream/{channel['id']}", headers={'User-Agent': self.user_agent})
+           data = response.json()
+           return {'url': data['url'], 'keys': data.get('keys', []), 'headers': data.get('headers', {})}
+   ```
+
+4. Repeat for additional providers (e.g., `scripts/anotherprovider/`).
+
+If no scripts are present, the script will fail when listing options.
+
+## Step 3: Run StreamUpdater.py
+
+1. Open a terminal/command prompt and navigate to the directory containing `StreamUpdater.py` (e.g., `cd /path/to/streamupdater`).
+
+2. Run the script:
+   ```
+   python StreamUpdater.py
+   ```
+   - Optional arguments:
+     - `--auto-select-script <number>`: Automatically select a script by its list number (e.g., `--auto-select-script 1` for the first script in `./scripts/`).
+     - `--auto-start-update`: Skip prompts and automatically start in mode 2 (using `streams.json`) and begin updating.
+
+3. Follow the on-screen prompts:
+   - **Script Selection**: Choose a provider script from the list (e.g., "1. myprovider").
+   - **Mode Selection**:
+     - 1: Manually select streams. It fetches channels, lets you pick (e.g., "1-3" for ranges), and saves to `streams.json`.
+     - 2: (If `streams.json` exists) Load pre-saved streams.
+   - **Start Updater**: Enter 'y' to start the server.
+
+4. The script clears the console, displays an ASCII banner, and starts a Flask server on the configured port (e.g., http://127.0.0.1:27015).
+   - It checks/creates streams in XAccel.
+   - Access streams via `/stream/<id>` (e.g., `/stream/0`), which redirects to the updated URL.
+   - Logs updates and redirections.
+
+5. To stop: Press Ctrl+C (calls `bye()` for clean exit).
+
+## Step 4: Using the Updater Modes
+
+- **Non-Legacy Mode** (Default):
+  - Runs a web server for on-demand updates.
+  - When `/stream/<id>` is requested, it checks the stream, updates if needed, and redirects.
+  - Integrates with XAccel to ensure streams are running.
+
+- **Legacy Mode** (If `"use_legacy": true` in script `config.json`):
+  - Polls XAccel stats periodically (every `delay` seconds).
+  - Automatically updates stalled streams (based on `tolerance` or `always_update_in_xaccel`).
+  - No web server; runs in a loop.
+
+## Step 5: Managing Streams
+
+- **streams.json**: Auto-generated/saved after manual selection. Example:
+  ```json
+  [
+    {
+      "url": "https://stream.example.com/hls/index.m3u8",
+      "keys": ["key1", "key2"],
+      "headers": {"Referer": "https://example.com"}
+    }
+  ]
+  ```
+  - Edit manually if needed, but back up first.
+
+- **Updating Streams**:
+  - In non-legacy: Triggered by requests to `/stream/<id>`.
+  - In legacy: Automatic based on stats.
+
+- **Troubleshooting**:
+  - Errors loading config/streams: Check JSON syntax.
+  - XAccel issues: Verify URL/token; check network/proxy.
+  - No streams: Ensure scripts return valid data.
+  - Port in use: Change port in `config.json`.
+  - Logs: Set `LOGLEVEL=DEBUG` env var for more info (e.g., `export LOGLEVEL=DEBUG` on Linux).
+
+## Step 6: Advanced Usage
+
+- **Proxies/User Agents**: Set in script class or config.
+- **Decryption Keys**: Preserved if `"preserve_keys": true`.
+- **XAccel Integration**: Uses `xaccel.py` to create/update streams. Customize mappings (video/audio/subtitle) in script class.
+- **Customization**: Extend script classes for complex providers (e.g., authentication, pagination).
+- **Security**: Run on localhost; expose carefully if remote. Use HTTPS for production.
+
+If issues persist, check console output or logs. For updates, refer to script version notes.
