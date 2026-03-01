@@ -99,6 +99,19 @@ class xaccel():
         response = requests.post(f'{self.base_url}/api/stream/{stream_name}/dynamic-url', headers=headers, json=json_data)
 
         return response.content.decode()
+
+    def update_stream_source_with_restart(self, stream_name, url):
+        headers = {
+            'Authorization': 'token ' + self.token,
+        }
+
+        json_data = [
+            url,
+        ]
+
+        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/source-update-with-restart', headers=headers, json=json_data)
+
+        return response.content.decode()
         
     def delete_stream(self, stream_name):
         headers = {

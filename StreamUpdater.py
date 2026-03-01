@@ -354,10 +354,10 @@ class StreamUpdater():
                                             self.xaccel.do_stream(name, self.Script.profile, url, keys=new_keys, video_map=self.Script.video_map, audio_map=self.Script.audio_map, subtitle_map=self.Script.subtitle_map, rate_emulation=self.Script.rate_emulation, header=headers)
                                             channels_updated+=1
                                         elif is_running and keys_changed:
-                                            # Stream is running but keys changed - hot swap via dynamic-url
-                                            self.xaccel.update_stream_source(name, url)
+                                            # Stream is running but keys changed - restart with new keys
+                                            self.xaccel.update_stream_source_with_restart(name, url)
                                             keys_refreshed+=1
-                                            print(f'{name} - keys refreshed')
+                                            print(f'{name} - keys refreshed (restarted)')
 
                                             # Update stored keys
                                             for s in self.streams:
