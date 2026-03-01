@@ -294,64 +294,86 @@ class StreamUpdater():
         channels = self.Script.get_channels()
         
         channels_updated = 0
+        keys_refreshed = 0
         checks_made = 1
         while True:
             try:
                 stream_stats = self.xaccel.fetch_stream_stats()
-            
+
                 self.ascii_clear()
-                
+
                 print('Channels updated:', channels_updated)
+                print('Keys refreshed:', keys_refreshed)
                 print('Checks made:', checks_made)
                 print('')
-                
+
                 for ss in stream_stats:
                     if self.Script.prefix in ss['name']:
                         name = ss['name']
 
-                        if (ss['status'] != 'running' and ss['status'] != 'starting') and (ss['bitrate'] == 0.0 or ss['speed'] < tolerance) or always_update_in_xaccel:
+                        is_broken = (ss['status'] != 'running' and ss['status'] != 'starting') and (ss['bitrate'] == 0.0 or ss['speed'] < tolerance)
+                        is_running = ss['status'] == 'running'
+
+                        if is_broken or always_update_in_xaccel or is_running:
                             for c in channels:
                                 if self.Script.get_title(c) == name.replace(self.Script.prefix, '').strip():
                                     try:
                                         old_keys = None
-                                    
+
                                         for s in self.streams:
                                             if self.Script.get_title(s) == self.Script.get_title(c):
                                                 if 'keys' in s:
                                                     old_keys = s['keys']
-                                        
+
                                         stream = self.Script.get_stream(c)
-                                        
+
                                         if old_keys and 'preserve_keys' in script_config and script_config['preserve_keys']:
                                             stream['keys'] = old_keys
-                                        
+
+                                        new_keys = stream.get('keys', None)
+                                        keys_changed = new_keys != old_keys
+
                                         url = stream['url']
-                                        
+
                                         if 'keys' in stream:
                                             if '?' in url:
                                                 url += '&decryption_key='
                                             else:
-                                                url += '?decryption_key='          
+                                                url += '?decryption_key='
                                             for key in stream['keys']:
                                                 url += f'{key},'
                                             url = url.strip(',')
-                                        
-                                        headers = ''
-                                        if 'headers' in stream:
-                                            for k, v in stream['headers'].items():
-                                                headers += f'{k}:{v}\r\n'
 
-                                        stream_keys = stream.get('keys', None)
-                                        self.xaccel.do_stream(name, self.Script.profile, url, keys=stream_keys, video_map=self.Script.video_map, audio_map=self.Script.audio_map, subtitle_map=self.Script.subtitle_map, rate_emulation=self.Script.rate_emulation, header=headers)
-                                        channels_updated+=1
-                                        
+                                        if is_broken or always_update_in_xaccel:
+                                            # Stream is down - full update with restart
+                                            headers = ''
+                                            if 'headers' in stream:
+                                                for k, v in stream['headers'].items():
+                                                    headers += f'{k}:{v}\r\n'
+
+                                            self.xaccel.do_stream(name, self.Script.profile, url, keys=new_keys, video_map=self.Script.video_map, audio_map=self.Script.audio_map, subtitle_map=self.Script.subtitle_map, rate_emulation=self.Script.rate_emulation, header=headers)
+                                            channels_updated+=1
+                                        elif is_running and keys_changed:
+                                            # Stream is running but keys changed - hot swap via dynamic-url
+                                            self.xaccel.update_stream_source(name, url)
+                                            keys_refreshed+=1
+                                            print(f'{name} - keys refreshed')
+
+                                            # Update stored keys
+                                            for s in self.streams:
+                                                if self.Script.get_title(s) == self.Script.get_title(c):
+                                                    s['keys'] = new_keys
+                                            self.store_streams()
+                                        else:
+                                            print(f'{name} - {ss["status"]}')
+
                                     except Exception as e:
                                         print('Something went wrong, skipping')
                                         print(e)
                         else:
                             print(f'{name} - {ss["status"]}')
-                              
-                              
+
+
                 checks_made+=1
                 print(f'\nFinished check, waiting {delay}s')
                 print('To quit, press CTRL+C')

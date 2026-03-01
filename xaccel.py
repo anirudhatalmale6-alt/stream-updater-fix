@@ -96,7 +96,7 @@ class xaccel():
             url,
         ]
 
-        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/source-update-with-restart', headers=headers, json=json_data)
+        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/dynamic-url', headers=headers, json=json_data)
 
         return response.content.decode()
         
