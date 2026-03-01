@@ -96,8 +96,8 @@ class xaccel():
             url,
         ]
 
-        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/dynamic-url', headers=headers, json=json_data)
-        
+        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/source-update-with-restart', headers=headers, json=json_data)
+
         return response.content.decode()
         
     def delete_stream(self, stream_name):
@@ -192,19 +192,12 @@ class xaccel():
                 else:
                     if header is not None:
                         self.update_stream_header(stream_name, header)
-                    # Push new decryption keys via dedicated endpoint
-                    if keys is not None and len(keys) > 0:
-                        self.change_keys(stream_name, keys)
-                    print(f'Updated {stream_name}')
+                    print(f'Updated {stream_name} (restarted with new source)')
             else:
                 print(cs['error'])
                 quit()
         else:
             print(f'Created {stream_name}')
-
-            # Push decryption keys for newly created stream
-            if keys is not None and len(keys) > 0:
-                self.change_keys(stream_name, keys)
 
             self.restart_stream(stream_name)
         
