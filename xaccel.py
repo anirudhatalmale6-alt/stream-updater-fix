@@ -87,6 +87,21 @@ class xaccel():
         
         #return data
         
+    def update_stream_config_url(self, stream_name, url):
+        headers = {
+            'Authorization': 'token ' + self.token,
+        }
+
+        json_data = {
+            'input_urls': [
+                url,
+            ],
+        }
+
+        response = requests.post(f'{self.base_url}/api/stream/{stream_name}/update', headers=headers, json=json_data)
+
+        return response.content.decode()
+
     def update_stream_source(self, stream_name, url):
         headers = {
             'Authorization': 'token ' + self.token,
@@ -196,16 +211,13 @@ class xaccel():
         if 'error' in cs:
             cs = json.loads(cs)
             if 'exists' in cs['error']:
+                # Update config with new URL (includes keys) BEFORE starting
+                self.update_stream_config_url(stream_name, url)
+                if header is not None:
+                    self.update_stream_header(stream_name, header)
+                # Now start - stream will use the updated URL with new keys
                 self.start_stream(stream_name)
-                uss = self.update_stream_source(stream_name, url)
-
-                if 'error' in uss:
-                    uss = json.loads(uss)
-                    print(uss['error'])
-                else:
-                    if header is not None:
-                        self.update_stream_header(stream_name, header)
-                    print(f'Updated {stream_name} (restarted with new source)')
+                print(f'Updated and started {stream_name}')
             else:
                 print(cs['error'])
                 quit()

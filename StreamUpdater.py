@@ -311,10 +311,11 @@ class StreamUpdater():
                     if self.Script.prefix in ss['name']:
                         name = ss['name']
 
-                        is_broken = (ss['status'] != 'running' and ss['status'] != 'starting') and (ss['bitrate'] == 0.0 or ss['speed'] < tolerance)
+                        is_stopped = ss['status'] == 'stopped'
+                        is_broken = (ss['status'] != 'running' and ss['status'] != 'starting' and not is_stopped) and (ss['bitrate'] == 0.0 or ss['speed'] < tolerance)
                         is_running = ss['status'] == 'running'
 
-                        if is_broken or always_update_in_xaccel or is_running:
+                        if is_broken or is_stopped or always_update_in_xaccel or is_running:
                             for c in channels:
                                 if self.Script.get_title(c) == name.replace(self.Script.prefix, '').strip():
                                     try:
@@ -344,7 +345,23 @@ class StreamUpdater():
                                                 url += f'{key},'
                                             url = url.strip(',')
 
-                                        if is_broken or always_update_in_xaccel:
+                                        if is_stopped:
+                                            # Channel is stopped - update keys and start it
+                                            headers = ''
+                                            if 'headers' in stream:
+                                                for k, v in stream['headers'].items():
+                                                    headers += f'{k}:{v}\r\n'
+
+                                            self.xaccel.do_stream(name, self.Script.profile, url, keys=new_keys, video_map=self.Script.video_map, audio_map=self.Script.audio_map, subtitle_map=self.Script.subtitle_map, rate_emulation=self.Script.rate_emulation, header=headers)
+                                            channels_updated+=1
+                                            print(f'{name} - was stopped, started with new keys')
+
+                                            # Update stored keys
+                                            for s in self.streams:
+                                                if self.Script.get_title(s) == self.Script.get_title(c):
+                                                    s['keys'] = new_keys
+                                            self.store_streams()
+                                        elif is_broken or always_update_in_xaccel:
                                             # Stream is down - full update with restart
                                             headers = ''
                                             if 'headers' in stream:
