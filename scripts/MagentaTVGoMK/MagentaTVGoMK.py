@@ -9,6 +9,7 @@ import re
 import uuid
 import json
 import os
+import threading
 
 requests.packages.urllib3.disable_warnings()
 
@@ -171,15 +172,15 @@ class MagentaTVGoMK():
         
         try:
             data = json.loads(response.content)
-            
+
             cdn = data['response']['cdns']['cdn'][0]['base_uri']
             path = data['response']['manifest_uri']
-            
+
             return cdn + '/' + path
         except:
             print('Failed getting single')
             print(response.content)
-            quit()
+            return None
     
     def beacon_stop(self, session_id, service_collection_id, media_id, owner_uid):
         headers = {
@@ -269,6 +270,139 @@ class MagentaTVGoMK():
         except Exception as e:
             pass
     
+    def get_all_init_urls(self, url):
+        """Get ALL init segment URLs from the DASH manifest (different Representations = different CDN cache entries)."""
+        try:
+            import time as _time
+            headers = {
+                'accept': '*/*',
+                'user-agent': self.user_agent,
+                'cache-control': 'no-cache, no-store, must-revalidate',
+                'pragma': 'no-cache',
+            }
+            sep = '&' if '?' in url else '?'
+            cache_bust_url = f'{url}{sep}_t={int(_time.time())}'
+            response = requests.get(cache_bust_url, headers=headers, proxies=self.proxies, verify=False)
+            location = response.url
+
+            soup = BeautifulSoup(response.content, features="xml")
+
+            loc_parts = location.split('/')
+            loc_parts.pop()
+            base_url = '/'.join(loc_parts)
+
+            init_urls = []
+            for seg_template in soup.find_all('SegmentTemplate'):
+                init_pattern = seg_template.get('initialization', '')
+                if not init_pattern:
+                    continue
+                parent = seg_template.parent
+                for rep in parent.find_all('Representation'):
+                    bandwidth = rep.get('bandwidth', '')
+                    rep_id = rep.get('id', '')
+                    init_url = base_url + '/' + init_pattern.replace('$Bandwidth$', bandwidth).replace('$RepresentationID$', rep_id)
+                    if init_url not in init_urls:
+                        init_urls.append(init_url)
+
+            return init_urls
+        except Exception as e:
+            return []
+
+    def get_media_segment_urls(self, url):
+        """Get live media segment URLs from DASH manifest. Media segments are NOT cached like init segments."""
+        try:
+            import time as _time
+            headers = {
+                'accept': '*/*',
+                'user-agent': self.user_agent,
+                'cache-control': 'no-cache, no-store, must-revalidate',
+                'pragma': 'no-cache',
+            }
+            sep = '&' if '?' in url else '?'
+            cache_bust_url = f'{url}{sep}_t={int(_time.time())}'
+            response = requests.get(cache_bust_url, headers=headers, proxies=self.proxies, verify=False)
+            location = response.url
+
+            soup = BeautifulSoup(response.content, features="xml")
+
+            loc_parts = location.split('/')
+            loc_parts.pop()
+            base_url = '/'.join(loc_parts)
+
+            media_urls = []
+            for seg_template in soup.find_all('SegmentTemplate'):
+                media_pattern = seg_template.get('media', '')
+                if not media_pattern:
+                    continue
+                timeline = seg_template.find('SegmentTimeline')
+                if not timeline:
+                    continue
+                parent = seg_template.parent
+                rep = parent.find('Representation')
+                if not rep:
+                    continue
+                bandwidth = rep.get('bandwidth', '')
+                rep_id = rep.get('id', '')
+
+                # Get the last segment number from timeline
+                segments = timeline.find_all('S')
+                if segments:
+                    last_seg = segments[-1]
+                    t = last_seg.get('t', '')
+                    if t:
+                        media_url = base_url + '/' + media_pattern.replace('$Bandwidth$', bandwidth).replace('$RepresentationID$', rep_id).replace('$Time$', t)
+                        media_urls.append(media_url)
+
+            return media_urls
+        except Exception as e:
+            return []
+
+    def get_pssh_from_media_segment(self, url):
+        """Extract PSSH from live media segments (moof boxes). During key rotation,
+        the packager may embed the new PSSH with new KID in media segments."""
+        media_urls = self.get_media_segment_urls(url)
+        headers = {
+            'accept': '*/*',
+            'user-agent': self.user_agent,
+            'cache-control': 'no-cache',
+        }
+        for media_url in media_urls[:2]:  # Try first 2 media segments
+            try:
+                response = requests.get(media_url, headers=headers, proxies=self.proxies, verify=False, timeout=10)
+                if response.status_code == 200 and len(response.content) > 100:
+                    psshs = self.to_pssh(response.content)
+                    if psshs:
+                        print('  Found PSSH in media segment!')
+                        return psshs[-1]
+            except Exception:
+                pass
+        return None
+
+    def get_pssh_aggressive(self, url, old_keys=None):
+        """Aggressively try to find fresh PSSH. Tries media segments first (not cached),
+        then all init segment URLs (different CDN cache entries)."""
+        # Strategy 1: Try MEDIA SEGMENTS first (most likely to have fresh PSSH during key rotation)
+        try:
+            media_pssh = self.get_pssh_from_media_segment(url)
+            if media_pssh:
+                return media_pssh, url
+        except Exception:
+            pass
+
+        # Strategy 2: Try ALL init segment URLs (different Representations = different cache entries)
+        init_urls = self.get_all_init_urls(url)
+        for init_url in init_urls:
+            try:
+                psshs = self.init_to_pssh(init_url)
+                if psshs:
+                    return psshs[-1], url
+            except Exception:
+                pass
+
+        # Strategy 3: Fall back to default single init URL
+        pssh = self.get_pssh(url)
+        return pssh, url
+
     def get_init_values(self):
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -418,29 +552,35 @@ class MagentaTVGoMK():
         return cookies['access-token'], cookies['oauth']
     
     def get_token(self):
+        """Thread-safe token refresh. Uses a lock to prevent concurrent threads
+        from consuming the single-use OAuth refresh token simultaneously."""
+        with self._token_lock:
+            return self._get_token_unsafe()
+
+    def _get_token_unsafe(self):
         try:
             f = open('auth.json', 'r')
             auth = json.loads(f.read())
             f.close()
-            
+
             refresh_token = auth['refresh_token']
             device_id = auth['device_id']
-            
+
             token, refresh_token = self.do_refresh(refresh_token, device_id)
             existing_device_id = self.take_existing_device_id(token, device_id)
             if device_id != existing_device_id:
                 device_id = existing_device_id
                 token, refresh_token = self.do_refresh(refresh_token, device_id)
-            
+
             f = open('auth.json', 'w')
             f.write(json.dumps({
                 'refresh_token': refresh_token,
                 'device_id': device_id,
             },indent=2))
             f.close()
-            
+
             return token, device_id
-            
+
         except Exception as e:
             pass
 
@@ -450,7 +590,7 @@ class MagentaTVGoMK():
             f = open('creds.json', 'r')
             creds = json.loads(f.read())
             f.close()
-            
+
             username = creds['username']
             password = creds['password']
             is_saved_credentials_login = True
@@ -459,7 +599,7 @@ class MagentaTVGoMK():
             print('Please log-in')
             username = input('\nEnter username: ')
             password = pwinput.pwinput()
-        
+
         session = requests.Session()
         device_id = str(uuid.uuid4())
         request_verification_token, form_action = self.init_login(session, device_id)
@@ -470,19 +610,19 @@ class MagentaTVGoMK():
                 token, refresh_token = self.do_refresh(refresh_token, existing_device_id)
             except:
                 print('Failed refresh on login')
-                quit()
-        
+                return None, None
+
         f = open('auth.json', 'w')
         f.write(json.dumps({
             'refresh_token': refresh_token,
             'device_id': device_id
         },indent=2))
         f.close()
-        
+
         if not is_saved_credentials_login:
             self.ascii_clear()
             choice = input('Save credentials? (y or n): ')
-            
+
             if choice.lower() == 'y':
                 f = open('creds.json', 'w')
                 f.write(json.dumps({
@@ -490,13 +630,17 @@ class MagentaTVGoMK():
                     'password': password,
                 }, indent=2))
                 f.close()
-        
+
         return token, device_id
     
     def get_stream(self, stream, old_keys=None, max_attempts=1):
         """Get stream data. If old_keys provided and max_attempts > 1,
-        tries multiple CDN sessions to find fresh keys faster."""
-        self.token, self.device_id = self.get_token()
+        tries multiple CDN sessions to find fresh keys faster.
+        Uses aggressive PSSH extraction (media segments + all init URLs)."""
+        token_result = self.get_token()
+        if not token_result or not token_result[0]:
+            return None
+        self.token, self.device_id = token_result
 
         service_collection_id = stream['service_collection_id']
         media_id = stream['service_map']['media_id']
@@ -516,7 +660,8 @@ class MagentaTVGoMK():
             if attempt > 0 and attempt % 2 == 0:
                 url = url.replace('wv1', 'wv3')
 
-            pssh = self.get_pssh(url)
+            # Use aggressive PSSH: media segments first, then all init URLs
+            pssh, pssh_url = self.get_pssh_aggressive(url, old_keys=old_keys)
             if pssh:
                 keys = self.do_cdm(pssh, session_id, service_collection_id, media_id, owner_uid)
                 if keys:
@@ -548,9 +693,10 @@ class MagentaTVGoMK():
             setattr(self, key, value)
         self.proxies = {'https': config['proxy'], 'http': config['proxy']}
         self.cdm_path = f'../../cdms/{config["cdm_file_name"]}'
-        
+        self._token_lock = threading.Lock()
+
         self.natco_key, self.app_key, self.app_version = self.get_init_values()
-        
+
         self.token, self.device_id = self.get_token()
-        
+
         self.device_profile = base64.b64encode(json.dumps({"model":"Desktop","osVersion":"10","vendorName":"Microsoft","osName":"HTML5","deviceUUID":self.device_id,"wvLevel":"L3"}, separators=(',', ':')).encode('utf-8')).decode('utf-8')
